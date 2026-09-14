@@ -184,7 +184,9 @@ class _QuotationScreenState extends State<QuotationScreen> {
     });
   }
 
-  // Xuất file PDF lưu trực tiếp vào bộ nhớ điện thoại
+  static const _pdfChannel = MethodChannel('hieuphuong_technology/pdf_helper');
+
+  // Xuất file PDF lưu trực tiếp vào thư mục Download của điện thoại
   Future<void> _exportPdf() async {
     _syncCustomerInfo();
 
@@ -211,7 +213,7 @@ class _QuotationScreenState extends State<QuotationScreen> {
               children: [
                 CircularProgressIndicator(color: Color(0xFF005C53)),
                 SizedBox(height: 14),
-                Text('Đang tạo và lưu file PDF vào máy...', style: TextStyle(fontSize: 13)),
+                Text('Đang tạo và lưu file vào thư mục Download...', style: TextStyle(fontSize: 13)),
               ],
             ),
           ),
@@ -224,35 +226,44 @@ class _QuotationScreenState extends State<QuotationScreen> {
       final cleanBg = _info.soBG.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
       final fileName = 'BangBaoGia_${cleanBg.isNotEmpty ? cleanBg : 'HieuPhuong'}.pdf';
 
-      // 1. Tìm thư mục lưu trữ trên thiết bị
-      Directory? targetDir;
-      try {
-        if (Platform.isAndroid) {
-          final downloadDir = Directory('/storage/emulated/0/Download');
-          if (await downloadDir.exists()) {
-            final testFile = File('${downloadDir.path}/.test_access');
-            await testFile.writeAsString('ok');
-            await testFile.delete();
-            targetDir = downloadDir;
+      String savedPath = '';
+      String? savedUri;
+
+      if (Platform.isAndroid) {
+        // Lưu thẳng vào thư mục Downloads của Android qua MediaStore
+        try {
+          final result = await _pdfChannel.invokeMapMethod<String, dynamic>(
+            'saveToDownloads',
+            {
+              'bytes': pdfBytes,
+              'fileName': fileName,
+            },
+          );
+          if (result != null) {
+            savedUri = result['uri'] as String?;
+            savedPath = result['displayPath'] as String? ?? '/storage/emulated/0/Download/$fileName';
           }
+        } catch (_) {
+          savedPath = '';
         }
-      } catch (_) {
-        targetDir = null;
       }
 
-      targetDir ??= await getExternalStorageDirectory() ?? await getApplicationDocumentsDirectory();
-
-      final savedFile = File('${targetDir.path}/$fileName');
-      await savedFile.writeAsBytes(pdfBytes, flush: true);
+      // Fallback nếu không phải Android hoặc lỗi native
+      if (savedPath.isEmpty) {
+        final dir = await getExternalStorageDirectory() ?? await getApplicationDocumentsDirectory();
+        final file = File('${dir.path}/$fileName');
+        await file.writeAsBytes(pdfBytes, flush: true);
+        savedPath = file.path;
+      }
 
       if (!mounted) return;
       Navigator.of(context, rootNavigator: true).pop(); // Đóng loading dialog
 
-      // 2. Mở BottomSheet hiển thị file đã lưu và tùy chọn mở xem trên máy
-      _showExportSuccessSheet(savedFile, pdfBytes, fileName);
+      // Mở BottomSheet thông báo và tùy chọn mở xem file
+      _showExportSuccessSheet(savedPath, savedUri, pdfBytes, fileName);
     } catch (e) {
       if (mounted) {
-        Navigator.of(context, rootNavigator: true).pop(); // Đóng loading dialog
+        Navigator.of(context, rootNavigator: true).pop();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Lỗi khi lưu file PDF: $e'),
@@ -263,7 +274,7 @@ class _QuotationScreenState extends State<QuotationScreen> {
     }
   }
 
-  void _showExportSuccessSheet(File file, Uint8List pdfBytes, String fileName) {
+  void _showExportSuccessSheet(String displayPath, String? uri, Uint8List pdfBytes, String fileName) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -289,8 +300,9 @@ class _QuotationScreenState extends State<QuotationScreen> {
               const Icon(Icons.check_circle, color: Color(0xFF005C53), size: 48),
               const SizedBox(height: 10),
               const Text(
-                'ĐÃ LƯU FILE PDF VÀO ĐIỆN THOẠI!',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF005C53)),
+                'ĐÃ LƯU VÀO THƯ MỤC DOWNLOAD!',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF005C53)),
+                textAlign: TextAlign.center,
               ),
               const SizedBox(height: 6),
               Text(
@@ -306,7 +318,7 @@ class _QuotationScreenState extends State<QuotationScreen> {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
-                  'Đường dẫn lưu trên máy:\n${file.path}',
+                  'Vị trí: $displayPath',
                   style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
                   textAlign: TextAlign.center,
                 ),
@@ -331,13 +343,34 @@ class _QuotationScreenState extends State<QuotationScreen> {
                   onPressed: () async {
                     final messenger = ScaffoldMessenger.of(context);
                     Navigator.pop(context);
-                    final result = await OpenFilex.open(file.path);
-                    if (result.type != ResultType.done) {
-                      messenger.showSnackBar(
-                        SnackBar(
-                          content: Text('Không thể mở file: ${result.message}'),
-                        ),
-                      );
+
+                    bool opened = false;
+                    // 1. Thử mở bằng native Android Intent Chooser
+                    if (Platform.isAndroid && (uri != null || displayPath.isNotEmpty)) {
+                      try {
+                        await _pdfChannel.invokeMethod('openPdf', {
+                          'uri': uri,
+                          'filePath': displayPath,
+                        });
+                        opened = true;
+                      } catch (_) {
+                        opened = false;
+                      }
+                    }
+
+                    // 2. Fallback bằng OpenFilex nếu chưa mở được
+                    if (!opened) {
+                      final result = await OpenFilex.open(displayPath);
+                      if (result.type != ResultType.done) {
+                        // 3. Fallback cuối cùng: Mở bằng Printing.sharePdf
+                        messenger.showSnackBar(
+                          const SnackBar(
+                            content: Text('Không tìm thấy app đọc PDF mặc định. Đang mở qua bảng chia sẻ...'),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                        await Printing.sharePdf(bytes: pdfBytes, filename: fileName);
+                      }
                     }
                   },
                 ),
@@ -356,7 +389,7 @@ class _QuotationScreenState extends State<QuotationScreen> {
                   ),
                   icon: const Icon(Icons.share, size: 20),
                   label: const Text(
-                    'GỬI FILE / LƯU (Zalo, Gmail, Drive...)',
+                    'GỬI FILE (Zalo, Gmail, Drive...)',
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                   ),
                   onPressed: () async {
