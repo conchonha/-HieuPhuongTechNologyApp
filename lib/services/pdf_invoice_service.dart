@@ -259,6 +259,20 @@ class PdfInvoiceService {
       'Ghi Chú',
     ];
 
+    // Định nghĩa độ rộng cố định cho từng cột (Tổng = 547.28 pt khớp khổ giấy A4)
+    const double colStt = 24.0;
+    const double colQuyCach = 175.0;
+    const double colNhanHieu = 65.0;
+    const double colDvt = 28.0;
+    const double colSl = 26.0;
+    const double colDonGia = 65.0;
+    const double colThanhTien = 75.0;
+    const double colVat = 26.0;
+    const double colGhiChu = 63.28;
+
+    // Chiều rộng gộp 6 cột đầu (STT + Quy cách + Nhãn hiệu + ĐVT + SL + Đơn Giá) = 383.0 pt
+    const double colMerged = colStt + colQuyCach + colNhanHieu + colDvt + colSl + colDonGia;
+
     // Tạo danh sách các dòng dữ liệu (tối thiểu 4 dòng để giống mẫu phiếu)
     final rowsCount = info.items.length < 4 ? 4 : info.items.length;
     final List<List<String>> tableData = [];
@@ -293,18 +307,26 @@ class PdfInvoiceService {
       }
     }
 
-    return pw.Table(
-      border: pw.TableBorder.all(color: borderColor, width: 0.6),
+    // Bảng 1: Header và các dòng vật phẩm (9 cột)
+    final itemsTable = pw.Table(
+      border: pw.TableBorder(
+        left: pw.BorderSide(color: borderColor, width: 0.6),
+        right: pw.BorderSide(color: borderColor, width: 0.6),
+        top: pw.BorderSide(color: borderColor, width: 0.6),
+        bottom: pw.BorderSide(color: borderColor, width: 0.6),
+        horizontalInside: pw.BorderSide(color: borderColor, width: 0.6),
+        verticalInside: pw.BorderSide(color: borderColor, width: 0.6),
+      ),
       columnWidths: const {
-        0: pw.FixedColumnWidth(26), // STT
-        1: pw.FlexColumnWidth(3.2), // Quy cách
-        2: pw.FlexColumnWidth(1.4), // Nhãn hiệu
-        3: pw.FixedColumnWidth(30), // ĐVT
-        4: pw.FixedColumnWidth(28), // SL
-        5: pw.FlexColumnWidth(1.6), // Đơn Giá
-        6: pw.FlexColumnWidth(1.8), // Thành Tiền
-        7: pw.FixedColumnWidth(28), // Vat
-        8: pw.FlexColumnWidth(1.5), // Ghi Chú
+        0: pw.FixedColumnWidth(colStt),
+        1: pw.FixedColumnWidth(colQuyCach),
+        2: pw.FixedColumnWidth(colNhanHieu),
+        3: pw.FixedColumnWidth(colDvt),
+        4: pw.FixedColumnWidth(colSl),
+        5: pw.FixedColumnWidth(colDonGia),
+        6: pw.FixedColumnWidth(colThanhTien),
+        7: pw.FixedColumnWidth(colVat),
+        8: pw.FixedColumnWidth(colGhiChu),
       },
       children: [
         // Header
@@ -343,25 +365,37 @@ class PdfInvoiceService {
             ],
           );
         }),
+      ],
+    );
 
-        // 3 DÒNG TỔNG CỘNG
+    // Bảng 2: 3 dòng tổng kết chiếm trọn 6 cột đầu (colMerged = 383 pt)
+    final summaryTable = pw.Table(
+      border: pw.TableBorder(
+        left: pw.BorderSide(color: borderColor, width: 0.6),
+        right: pw.BorderSide(color: borderColor, width: 0.6),
+        top: pw.BorderSide.none, // Liền mạch với đáy của Bảng 1
+        bottom: pw.BorderSide(color: borderColor, width: 0.6),
+        horizontalInside: pw.BorderSide(color: borderColor, width: 0.6),
+        verticalInside: pw.BorderSide(color: borderColor, width: 0.6),
+      ),
+      columnWidths: const {
+        0: pw.FixedColumnWidth(colMerged),    // Gộp STT, Quy cách, Nhãn hiệu, ĐVT, SL, Đơn giá
+        1: pw.FixedColumnWidth(colThanhTien), // Thành Tiền
+        2: pw.FixedColumnWidth(colVat),       // Vat
+        3: pw.FixedColumnWidth(colGhiChu),    // Ghi Chú
+      },
+      children: [
         // 1. TỔNG CỘNG TRƯỚC THUẾ
         pw.TableRow(
           children: [
             pw.Container(
               alignment: pw.Alignment.center,
-              padding: const pw.EdgeInsets.symmetric(vertical: 3, horizontal: 4),
+              padding: const pw.EdgeInsets.symmetric(vertical: 3.5, horizontal: 4),
               child: pw.Text(
                 'TỔNG CỘNG TRƯỚC THUẾ',
                 style: pw.TextStyle(font: fontBold, fontSize: 8),
               ),
             ),
-            // Trống cho các cột giữa
-            pw.Container(),
-            pw.Container(),
-            pw.Container(),
-            pw.Container(),
-            pw.Container(),
             _buildCell(
               info.items.isEmpty ? '-' : currencyFormatter.format(info.tongTruocThue),
               fontBold,
@@ -377,17 +411,12 @@ class PdfInvoiceService {
           children: [
             pw.Container(
               alignment: pw.Alignment.center,
-              padding: const pw.EdgeInsets.symmetric(vertical: 3, horizontal: 4),
+              padding: const pw.EdgeInsets.symmetric(vertical: 3.5, horizontal: 4),
               child: pw.Text(
                 'THUẾ V.A.T',
                 style: pw.TextStyle(font: fontBold, fontSize: 8),
               ),
             ),
-            pw.Container(),
-            pw.Container(),
-            pw.Container(),
-            pw.Container(),
-            pw.Container(),
             _buildCell(
               info.items.isEmpty ? '-' : currencyFormatter.format(info.tongTienVat),
               fontBold,
@@ -398,23 +427,18 @@ class PdfInvoiceService {
           ],
         ),
 
-        // 3. TỔNG CỘNG SAU THUẾ (nền xanh)
+        // 3. TỔNG CỘNG SAU THUẾ (nền xanh chữ trắng toàn bộ hàng)
         pw.TableRow(
           decoration: pw.BoxDecoration(color: primaryTeal),
           children: [
             pw.Container(
               alignment: pw.Alignment.center,
-              padding: const pw.EdgeInsets.symmetric(vertical: 3, horizontal: 4),
+              padding: const pw.EdgeInsets.symmetric(vertical: 3.5, horizontal: 4),
               child: pw.Text(
                 'TỔNG CỘNG SAU THUẾ',
                 style: pw.TextStyle(font: fontBold, fontSize: 8, color: PdfColors.white),
               ),
             ),
-            pw.Container(),
-            pw.Container(),
-            pw.Container(),
-            pw.Container(),
-            pw.Container(),
             _buildCell(
               info.items.isEmpty ? '-' : currencyFormatter.format(info.tongSauThue),
               fontBold,
@@ -422,9 +446,16 @@ class PdfInvoiceService {
               textColor: PdfColors.white,
             ),
             _buildCell('-', fontRegular, align: pw.Alignment.center, textColor: PdfColors.white),
-            _buildCell('', fontRegular),
+            _buildCell('', fontRegular, textColor: PdfColors.white),
           ],
         ),
+      ],
+    );
+
+    return pw.Column(
+      children: [
+        itemsTable,
+        summaryTable,
       ],
     );
   }
