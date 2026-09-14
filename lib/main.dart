@@ -248,9 +248,20 @@ class _QuotationScreenState extends State<QuotationScreen> {
         }
       }
 
-      // Fallback nếu không phải Android hoặc lỗi native
+      // Xử lý lưu file trên iOS hoặc fallback Android
       if (savedPath.isEmpty) {
-        final dir = await getExternalStorageDirectory() ?? await getApplicationDocumentsDirectory();
+        Directory dir;
+        if (Platform.isAndroid) {
+          try {
+            dir = (await getExternalStorageDirectory()) ?? (await getApplicationDocumentsDirectory());
+          } catch (_) {
+            dir = await getApplicationDocumentsDirectory();
+          }
+        } else {
+          // Trên iOS: Dùng getApplicationDocumentsDirectory() (hiển thị trực tiếp trong app Tệp)
+          dir = await getApplicationDocumentsDirectory();
+        }
+
         final file = File('${dir.path}/$fileName');
         await file.writeAsBytes(pdfBytes, flush: true);
         savedPath = file.path;
@@ -275,6 +286,12 @@ class _QuotationScreenState extends State<QuotationScreen> {
   }
 
   void _showExportSuccessSheet(String displayPath, String? uri, Uint8List pdfBytes, String fileName) {
+    final isIos = Platform.isIOS;
+    final titleText = isIos ? 'ĐÃ TẠO VÀ LƯU FILE PDF THÀNH CÔNG!' : 'ĐÃ LƯU VÀO THƯ MỤC DOWNLOAD!';
+    final locationText = isIos
+        ? 'Vị trí: Ứng dụng Tệp > Trên iPhone > Hiếu Phương Technology\n($displayPath)'
+        : 'Vị trí: $displayPath';
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -299,9 +316,9 @@ class _QuotationScreenState extends State<QuotationScreen> {
               const SizedBox(height: 16),
               const Icon(Icons.check_circle, color: Color(0xFF005C53), size: 48),
               const SizedBox(height: 10),
-              const Text(
-                'ĐÃ LƯU VÀO THƯ MỤC DOWNLOAD!',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF005C53)),
+              Text(
+                titleText,
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF005C53)),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 6),
@@ -318,7 +335,7 @@ class _QuotationScreenState extends State<QuotationScreen> {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
-                  'Vị trí: $displayPath',
+                  locationText,
                   style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
                   textAlign: TextAlign.center,
                 ),
