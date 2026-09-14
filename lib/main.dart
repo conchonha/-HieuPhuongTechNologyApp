@@ -1,6 +1,9 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:printing/printing.dart';
 import 'models/quotation_info.dart';
 import 'models/quotation_item.dart';
@@ -181,7 +184,7 @@ class _QuotationScreenState extends State<QuotationScreen> {
     });
   }
 
-  // Xuất và xem trước file PDF
+  // Xuất file PDF lưu trực tiếp vào bộ nhớ điện thoại
   Future<void> _exportPdf() async {
     _syncCustomerInfo();
 
@@ -195,21 +198,178 @@ class _QuotationScreenState extends State<QuotationScreen> {
       return;
     }
 
+    // Hiển thị dialog đang tạo file
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(color: Color(0xFF005C53)),
+                SizedBox(height: 14),
+                Text('Đang tạo và lưu file PDF vào máy...', style: TextStyle(fontSize: 13)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
     try {
-      await Printing.layoutPdf(
-        name: 'BangBaoGia_${_info.soBG}.pdf',
-        onLayout: (format) async => await PdfInvoiceService.generatePdf(_info),
-      );
+      final pdfBytes = await PdfInvoiceService.generatePdf(_info);
+      final cleanBg = _info.soBG.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+      final fileName = 'BangBaoGia_${cleanBg.isNotEmpty ? cleanBg : 'HieuPhuong'}.pdf';
+
+      // 1. Tìm thư mục lưu trữ trên thiết bị
+      Directory? targetDir;
+      try {
+        if (Platform.isAndroid) {
+          final downloadDir = Directory('/storage/emulated/0/Download');
+          if (await downloadDir.exists()) {
+            final testFile = File('${downloadDir.path}/.test_access');
+            await testFile.writeAsString('ok');
+            await testFile.delete();
+            targetDir = downloadDir;
+          }
+        }
+      } catch (_) {
+        targetDir = null;
+      }
+
+      targetDir ??= await getExternalStorageDirectory() ?? await getApplicationDocumentsDirectory();
+
+      final savedFile = File('${targetDir.path}/$fileName');
+      await savedFile.writeAsBytes(pdfBytes, flush: true);
+
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop(); // Đóng loading dialog
+
+      // 2. Mở BottomSheet hiển thị file đã lưu và tùy chọn mở xem trên máy
+      _showExportSuccessSheet(savedFile, pdfBytes, fileName);
     } catch (e) {
       if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop(); // Đóng loading dialog
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Lỗi khi xuất PDF: $e'),
+            content: Text('Lỗi khi lưu file PDF: $e'),
             backgroundColor: Colors.red,
           ),
         );
       }
     }
+  }
+
+  void _showExportSuccessSheet(File file, Uint8List pdfBytes, String fileName) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Icon(Icons.check_circle, color: Color(0xFF005C53), size: 48),
+              const SizedBox(height: 10),
+              const Text(
+                'ĐÃ LƯU FILE PDF VÀO ĐIỆN THOẠI!',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF005C53)),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                fileName,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'Đường dẫn lưu trên máy:\n${file.path}',
+                  style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // Nút 1: Mở xem file PDF bằng ứng dụng trên máy
+              SizedBox(
+                width: double.infinity,
+                height: 46,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF005C53),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  icon: const Icon(Icons.picture_as_pdf, size: 20),
+                  label: const Text(
+                    'MỞ XEM FILE PDF TRÊN ĐIỆN THOẠI',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                  ),
+                  onPressed: () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    Navigator.pop(context);
+                    final result = await OpenFilex.open(file.path);
+                    if (result.type != ResultType.done) {
+                      messenger.showSnackBar(
+                        SnackBar(
+                          content: Text('Không thể mở file: ${result.message}'),
+                        ),
+                      );
+                    }
+                  },
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              // Nút 2: Gửi file qua Zalo, Messenger, Email hoặc Lưu vào Tệp
+              SizedBox(
+                width: double.infinity,
+                height: 44,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF005C53),
+                    side: const BorderSide(color: Color(0xFF005C53)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  icon: const Icon(Icons.share, size: 20),
+                  label: const Text(
+                    'GỬI FILE / LƯU (Zalo, Gmail, Drive...)',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                  onPressed: () async {
+                    Navigator.pop(context);
+                    await Printing.sharePdf(bytes: pdfBytes, filename: fileName);
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   @override
